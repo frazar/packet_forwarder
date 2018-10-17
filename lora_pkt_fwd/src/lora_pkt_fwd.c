@@ -171,6 +171,9 @@ static struct coord_s reference_coord;
 /* Enable faking the GPS coordinates of the gateway */
 static bool gps_fake_enable; /* enable the feature */
 
+/* Enable faking the GPS time of the gateway */
+static bool gps_time_fake_enable;
+
 /* measurements to establish statistics */
 static pthread_mutex_t mx_meas_up = PTHREAD_MUTEX_INITIALIZER; /* control access to the upstream measurements */
 static uint32_t meas_nb_rx_rcv = 0; /* count packets received */
@@ -782,6 +785,17 @@ static int parse_gateway_configuration(const char * conf_file) {
         }
     }
 
+    /* Option to fake Gateway GPS time with OS time */
+    val = json_object_get_value(conf_obj, "fake_gps_time");
+    if (json_value_get_type(val) == JSONBoolean) {
+        gps_time_fake_enable = (bool)json_value_get_boolean(val);
+        if (gps_time_fake_enable == true) {
+            MSG("INFO: fake GPS is enabled\n");
+        } else {
+            MSG("INFO: fake GPS is disabled\n");
+        }
+    }
+
     /* Beacon signal period (optional) */
     val = json_object_get_value(conf_obj, "beacon_period");
     if (val != NULL) {
@@ -1386,11 +1400,20 @@ int main(void)
             } else {
                 printf("# no valid GPS coordinates available yet\n");
             }
-        } else if (gps_fake_enable == true) {
-            printf("# GPS *FAKE* coordinates: latitude %.5f, longitude %.5f, altitude %i m\n", cp_gps_coord.lat, cp_gps_coord.lon, cp_gps_coord.alt);
         } else {
-            printf("# GPS sync is disabled\n");
+            if (gps_fake_enable == true) {
+                printf("# GPS *FAKE* coordinates: latitude %.5f, longitude %.5f, altitude %i m\n", cp_gps_coord.lat, cp_gps_coord.lon, cp_gps_coord.alt);
+            } else {
+                printf("# GPS sync is disabled\n");
+            }
+
+            if (gps_time_fake_enable == true) {
+                printf("# GPS time will be faked with OS time.\n");
+            } else {
+                printf("# GPS time will not be sent.\n");
+            }
         }
+
         printf("##### END #####\n");
 
         /* generate a JSON report (will be sent to server by upstream thread) */
@@ -1607,10 +1630,19 @@ void thread_up(void) {
             }
 
             /* Packet RX time (GPS based), 37 useful chars */
-            if (ref_ok == true) {
-                /* convert packet timestamp to UTC absolute time */
-                j = lgw_cnt2utc(local_ref, p->count_us, &pkt_utc_time);
-                if (j == LGW_GPS_SUCCESS) {
+            if (ref_ok == true || gps_time_fake_enable == true) {
+
+                int success;
+                if (ref_ok == true) {
+                    /* convert packet timestamp to UTC absolute time */
+                    success = lgw_cnt2utc(local_ref, p->count_us, &pkt_utc_time); // Returns LGW_GPS_SUCCESS on success
+                } else { // gps_time_fake_enable == true
+                    /* Get current time from OS */
+                    success = clock_gettime(CLOCK_MONOTONIC, &pkt_utc_time); // Returns 0 on success
+                }
+
+                if ((ref_ok == true               && success == LGW_GPS_SUCCESS) ||
+                    (gps_time_fake_enable == true && success == 0)) {
                     /* split the UNIX timestamp to its calendar components */
                     x = gmtime(&(pkt_utc_time.tv_sec));
                     j = snprintf((char *)(buff_up + buff_index), TX_BUFF_SIZE-buff_index, ",\"time\":\"%04i-%02i-%02iT%02i:%02i:%02i.%06liZ\"", (x->tm_year)+1900, (x->tm_mon)+1, x->tm_mday, x->tm_hour, x->tm_min, x->tm_sec, (pkt_utc_time.tv_nsec)/1000); /* ISO 8601 format */
@@ -1621,11 +1653,23 @@ void thread_up(void) {
                         exit(EXIT_FAILURE);
                     }
                 }
-                /* convert packet timestamp to GPS absolute time */
-                j = lgw_cnt2gps(local_ref, p->count_us, &pkt_gps_time);
-                if (j == LGW_GPS_SUCCESS) {
-                    pkt_gps_time_ms = pkt_gps_time.tv_sec * 1E3 + pkt_gps_time.tv_nsec / 1E6;
-                    j = snprintf((char *)(buff_up + buff_index), TX_BUFF_SIZE-buff_index, ",\"tmms\":%llu",
+
+                if (ref_ok == true) {
+                    /* convert packet timestamp to GPS absolute time */
+                    success = lgw_cnt2gps(local_ref, p->count_us, &pkt_gps_time);
+                    if (success == LGW_GPS_SUCCESS) {
+                        pkt_gps_time_ms = pkt_gps_time.tv_sec * 1E3 + pkt_gps_time.tv_nsec / 1E6;
+                    }
+                } else { // gps_time_fake_enable == true
+                    // Do nothing, pkt_gps_time has already been populated.
+                }
+
+                if ((ref_ok == true               && success == LGW_GPS_SUCCESS) ||
+                    (gps_time_fake_enable == true && success == 0)) {
+                    pkt_gps_time_ms = pkt_gps_time.tv_sec * 1E3 + pkt_gps_time.tv_nsec / 1E6 // Convert in milliseconds..
+                                      - 315964800; // remove the milliseconds between 1.1.1970 and 6.1.1980 and the leap seconds.
+                    j = snprintf((char *)(buff_up + buff_index),
+                                 TX_BUFF_SIZE-buff_index, ",\"tmms\":%llu",
                                     pkt_gps_time_ms); /* GPS time in milliseconds since 06.Jan.1980 */
                     if (j > 0) {
                         buff_index += j;
