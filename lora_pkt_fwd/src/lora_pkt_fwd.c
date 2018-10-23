@@ -790,9 +790,9 @@ static int parse_gateway_configuration(const char * conf_file) {
     if (json_value_get_type(val) == JSONBoolean) {
         gps_time_fake_enable = (bool)json_value_get_boolean(val);
         if (gps_time_fake_enable == true) {
-            MSG("INFO: fake GPS is enabled\n");
+            MSG("INFO: fake GPS time is enabled\n");
         } else {
-            MSG("INFO: fake GPS is disabled\n");
+            MSG("INFO: fake GPS time is disabled\n");
         }
     }
 
