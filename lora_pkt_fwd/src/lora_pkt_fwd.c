@@ -1638,7 +1638,7 @@ void thread_up(void) {
                     success = lgw_cnt2utc(local_ref, p->count_us, &pkt_utc_time); // Returns LGW_GPS_SUCCESS on success
                 } else { // gps_time_fake_enable == true
                     /* Get current time from OS */
-                    success = clock_gettime(CLOCK_MONOTONIC, &pkt_utc_time); // Returns 0 on success
+                    success = clock_gettime(CLOCK_REALTIME, &pkt_utc_time); // Returns 0 on success
                 }
 
                 if ((ref_ok == true               && success == LGW_GPS_SUCCESS) ||
@@ -1661,16 +1661,19 @@ void thread_up(void) {
                         pkt_gps_time_ms = pkt_gps_time.tv_sec * 1E3 + pkt_gps_time.tv_nsec / 1E6;
                     }
                 } else { // gps_time_fake_enable == true
-                    // Do nothing, pkt_gps_time has already been populated.
+                    // Convert in milliseconds and remove the milliseconds
+                    // between 1.1.1970 and 6.1.1980, also considering the leap
+                    // seconds
+                    pkt_gps_time_ms = (pkt_utc_time.tv_sec - 315964800) * 1E3 +
+                                      pkt_utc_time.tv_nsec / 1E6;
                 }
 
                 if ((ref_ok == true               && success == LGW_GPS_SUCCESS) ||
                     (gps_time_fake_enable == true && success == 0)) {
-                    pkt_gps_time_ms = pkt_gps_time.tv_sec * 1E3 + pkt_gps_time.tv_nsec / 1E6 // Convert in milliseconds..
-                                      - 315964800; // remove the milliseconds between 1.1.1970 and 6.1.1980 and the leap seconds.
+
                     j = snprintf((char *)(buff_up + buff_index),
                                  TX_BUFF_SIZE-buff_index, ",\"tmms\":%llu",
-                                    pkt_gps_time_ms); /* GPS time in milliseconds since 06.Jan.1980 */
+                                 pkt_gps_time_ms);
                     if (j > 0) {
                         buff_index += j;
                     } else {
